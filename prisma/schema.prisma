@@ -1,0 +1,204 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id             String    @id @default(uuid())
+  name           String
+  username       String?   @unique // null until an OAuth first-timer completes their profile
+  email          String    @unique
+  password       String?   // bcrypt hash — null for OAuth-only accounts
+  orgType        String?   // "university" | "company" — null until profile completed
+  orgName        String?
+  emailVerified  Boolean   @default(false)
+  otpCodeHash    String?   // bcrypt hash of the current OTP — never store it in plain text
+  otpExpiresAt   DateTime?
+  resetTokenHash      String?   // bcrypt hash of the current password-reset token
+  resetTokenExpiresAt DateTime?
+  provider       String    @default("local") // "local" | "google" | "facebook" | "github"
+  providerId     String?   // the provider's own user id — null for local accounts
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([provider, providerId])
+
+  ownedEvents    Event[]         @relation("EventOwner")
+  taggedEvents   EventAttendee[]
+  ownedWorkspaces  Workspace[]       @relation("WorkspaceOwner")
+  memberships      WorkspaceMember[]
+  friendshipsA     Friendship[]      @relation("FriendshipA")
+  friendshipsB     Friendship[]      @relation("FriendshipB")
+  sentFriendRequests     FriendRequest[] @relation("FriendRequestSender")
+  receivedFriendRequests FriendRequest[] @relation("FriendRequestReceiver")
+  assignedTasks          Task[]          @relation("TaskAssignee")
+  taskComments           TaskComment[]
+}
+
+// Same org/university — adding someone connects you both immediately.
+// Different org/university — goes through FriendRequest instead, so the
+// receiver has to accept or reject before a Friendship row is created.
+model Friendship {
+  id        String   @id @default(uuid())
+  userAId   String
+  userA     User     @relation("FriendshipA", fields: [userAId], references: [id])
+  userBId   String
+  userB     User     @relation("FriendshipB", fields: [userBId], references: [id])
+  createdAt DateTime @default(now())
+
+  @@unique([userAId, userBId])
+}
+
+model FriendRequest {
+  id         String   @id @default(uuid())
+  senderId   String
+  sender     User     @relation("FriendRequestSender", fields: [senderId], references: [id])
+  receiverId String
+  receiver   User     @relation("FriendRequestReceiver", fields: [receiverId], references: [id])
+  status     String   @default("pending") // "pending" | "accepted" | "rejected"
+  createdAt  DateTime @default(now())
+
+  @@unique([senderId, receiverId])
+}
+
+// A "group" — can be someone's personal space (1 member: themself) or a
+// real shared group with invited members. Every board lives inside one.
+model Workspace {
+  id         String            @id @default(uuid())
+  name       String
+  isPersonal Boolean           @default(false)
+  ownerId    String
+  owner      User              @relation("WorkspaceOwner", fields: [ownerId], references: [id])
+  members    WorkspaceMember[]
+  board      Board?
+  createdAt  DateTime          @default(now())
+}
+
+model WorkspaceMember {
+  id          String    @id @default(uuid())
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+  role        String    @default("member") // "owner" | "member"
+  joinedAt    DateTime  @default(now())
+
+  @@unique([workspaceId, userId])
+}
+
+// One board per workspace for now — a personal workspace's board is only
+// visible to its owner; a group workspace's board is visible to every
+// invited member.
+model Board {
+  id          String          @id @default(uuid())
+  name        String          @default("My Board")
+  workspaceId String          @unique
+  workspace   Workspace       @relation(fields: [workspaceId], references: [id])
+  columns     BoardColumn[]
+  categories  BoardCategory[]
+  tasks       Task[]
+  // Free-form notes area for the board — an array of small blocks
+  // (text / to-do, each with its own color), stored as JSON since the
+  // block shapes are simple and don't need their own table yet.
+  noteContent Json            @default("[]")
+  createdAt   DateTime        @default(now())
+}
+
+// Replaces the old fixed TaskStatus enum — columns are just rows now,
+// so the user can rename them or add new ones from the UI.
+model BoardColumn {
+  id           String   @id @default(uuid())
+  boardId      String
+  board        Board    @relation(fields: [boardId], references: [id])
+  name         String
+  order        Int      @default(0)
+  color        String?  // manual pick — falls back to a name-hash color on the frontend if unset
+  isDoneColumn Boolean  @default(false) // marks this column as "finished" for due-date reminders
+  tasks        Task[]
+  createdAt    DateTime @default(now())
+}
+
+// A managed, per-board list of category tags — seeded with a few
+// defaults on creation, then the user can add or delete their own.
+model BoardCategory {
+  id        String   @id @default(uuid())
+  boardId   String
+  board     Board    @relation(fields: [boardId], references: [id])
+  name      String
+  color     String
+  tasks     Task[]
+  createdAt DateTime @default(now())
+}
+
+model Task {
+  id           String         @id @default(uuid())
+  boardId      String
+  board        Board          @relation(fields: [boardId], references: [id])
+  statusId     String
+  statusColumn BoardColumn    @relation(fields: [statusId], references: [id])
+  title        String
+  dueDate      DateTime?
+  note         String?        // shown as "คำอธิบาย" (description) in the UI
+  categoryId   String?
+  categoryRef  BoardCategory? @relation(fields: [categoryId], references: [id])
+  priority     String?        // "ต่ำ" | "ปานกลาง" | "สูง" — plain string, no enum yet
+  assigneeId   String?
+  assignee     User?          @relation("TaskAssignee", fields: [assigneeId], references: [id])
+  archivedAt   DateTime?      // non-null = hidden from the normal board view
+  subtasks     Subtask[]
+  comments     TaskComment[]
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+}
+
+model TaskComment {
+  id        String   @id @default(uuid())
+  taskId    String
+  task      Task     @relation(fields: [taskId], references: [id])
+  authorId  String
+  author    User     @relation(fields: [authorId], references: [id])
+  content   String
+  createdAt DateTime @default(now())
+}
+
+model Subtask {
+  id        String   @id @default(uuid())
+  taskId    String
+  task      Task     @relation(fields: [taskId], references: [id])
+  title     String
+  done      Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+// Standalone calendar entries — separate from Task, for things that live
+// on the calendar but aren't part of the Task board (e.g. a meeting).
+model Event {
+  id          String          @id @default(uuid())
+  ownerId     String
+  owner       User            @relation("EventOwner", fields: [ownerId], references: [id])
+  title       String
+  description String?
+  isAllDay    Boolean         @default(true)
+  startDate   DateTime        // date, or date+time when isAllDay is false
+  endDate     DateTime?       // optional — defaults to startDate if not given
+  attendees   EventAttendee[]
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+}
+
+// Real link to a User — tagging someone here means the event shows up
+// when THEY fetch their calendar too, not just the owner's.
+model EventAttendee {
+  id        String   @id @default(uuid())
+  eventId   String
+  event     Event    @relation(fields: [eventId], references: [id])
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+
+  @@unique([eventId, userId])
+}
