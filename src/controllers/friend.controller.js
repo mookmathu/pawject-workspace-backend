@@ -1,7 +1,7 @@
 const prisma = require("../lib/prisma");
+const { PUBLIC_USER_SELECT, toPublicUser } = require("../lib/serializeUser");
 
-const USER_PUBLIC_SELECT = { id: true, username: true, name: true };
-const USER_PUBLIC_SELECT_WITH_ORG = { id: true, username: true, name: true, orgType: true, orgName: true };
+const USER_PUBLIC_SELECT = PUBLIC_USER_SELECT;
 
 async function getFriends(req, res) {
   try {
@@ -15,7 +15,7 @@ async function getFriends(req, res) {
     });
 
     // Flatten to "the other person" regardless of which side of the row I'm on.
-    const friends = friendships.map((f) => (f.userAId === req.userId ? f.userB : f.userA));
+    const friends = friendships.map((f) => toPublicUser(f.userAId === req.userId ? f.userB : f.userA));
 
     return res.status(200).json({ friends });
   } catch (err) {
@@ -52,7 +52,7 @@ async function addFriend(req, res) {
     const sameOrg = me.orgType === targetUser.orgType && me.orgName === targetUser.orgName;
     if (sameOrg) {
       await prisma.friendship.create({ data: { userAId: a, userBId: b } });
-      return res.status(201).json({ friend: { id: targetUser.id, username: targetUser.username, name: targetUser.name } });
+      return res.status(201).json({ friend: toPublicUser(targetUser) });
     }
 
     // Different university/organization: needs the other person to accept.
@@ -72,7 +72,7 @@ async function addFriend(req, res) {
     await prisma.friendRequest.create({ data: { senderId: req.userId, receiverId: targetUser.id } });
     return res
       .status(202)
-      .json({ request: { id: targetUser.id, username: targetUser.username, name: targetUser.name } });
+      .json({ request: toPublicUser(targetUser) });
   } catch (err) {
     console.error("Add friend error:", err);
     return res.status(500).json({ error: "เกิดข้อผิดพลาดในเซิร์ฟเวอร์" });
@@ -96,7 +96,7 @@ async function getFriendRequests(req, res) {
   try {
     const requests = await prisma.friendRequest.findMany({
       where: { receiverId: req.userId, status: "pending" },
-      include: { sender: { select: USER_PUBLIC_SELECT_WITH_ORG } },
+      include: { sender: { select: USER_PUBLIC_SELECT } },
       orderBy: { createdAt: "desc" },
     });
 
@@ -104,7 +104,7 @@ async function getFriendRequests(req, res) {
       requests: requests.map((r) => ({
         id: r.id,
         createdAt: r.createdAt,
-        sender: r.sender,
+        sender: toPublicUser(r.sender),
       })),
     });
   } catch (err) {

@@ -71,6 +71,26 @@ async function createEvent(req, res) {
       return res.status(400).json({ error: "กรุณาระบุวันที่เริ่มต้น" });
     }
 
+    if (endDate && new Date(endDate) < new Date(startDate)) {
+      return res.status(400).json({ error: "เวลาสิ้นสุดต้องไม่ก่อนเวลาเริ่มต้น" });
+    }
+
+    // A double-click / retry can send the same create twice — if an identical
+    // event from this owner was created in the last few seconds, return that
+    // one instead of adding a duplicate.
+    const recentDuplicate = await prisma.event.findFirst({
+      where: {
+        ownerId: req.userId,
+        title: title.trim(),
+        startDate: new Date(startDate),
+        createdAt: { gte: new Date(Date.now() - 10 * 1000) },
+      },
+      include: EVENT_INCLUDE,
+    });
+    if (recentDuplicate) {
+      return res.status(200).json({ event: recentDuplicate, notFoundUsernames: [] });
+    }
+
     const { userIds, notFound } = await resolveUsernames(attendeeUsernames, req.userId);
 
     const event = await prisma.event.create({
@@ -101,6 +121,12 @@ async function updateEvent(req, res) {
     const existing = await loadOwnedEvent(eventId, req.userId);
     if (!existing) {
       return res.status(404).json({ error: "ไม่พบกิจกรรมนี้" });
+    }
+
+    const nextStart = startDate !== undefined ? startDate : existing.startDate;
+    const nextEnd = endDate !== undefined ? endDate : existing.endDate;
+    if (nextStart && nextEnd && new Date(nextEnd) < new Date(nextStart)) {
+      return res.status(400).json({ error: "เวลาสิ้นสุดต้องไม่ก่อนเวลาเริ่มต้น" });
     }
 
     let notFound = [];

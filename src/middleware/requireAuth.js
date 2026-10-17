@@ -1,4 +1,5 @@
 const jwt = require("jsonwebtoken");
+const { recordActivity } = require("../lib/activity");
 
 // Not wired into any route yet — use this later on routes that should only
 // work for a logged-in user, e.g. router.get("/me", requireAuth, handler).
@@ -13,6 +14,7 @@ function requireAuth(req, res, next) {
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET);
     req.userId = payload.sub;
+    recordActivity(req.userId); // feeds the Profile page's daily-activity heatmap
     next();
   } catch (err) {
     return res.status(401).json({ error: "เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่" });

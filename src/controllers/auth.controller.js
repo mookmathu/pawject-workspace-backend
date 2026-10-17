@@ -1,7 +1,15 @@
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
 const prisma = require("../lib/prisma");
 const { sendOtpEmail } = require("../lib/email");
+// toSafeUser — shared with profile.controller.js (see lib/serializeUser.js).
+// Login/verifyOtp used to build their own user object by hand and never
+// computed avatarUrl, so a photo uploaded after email/password login never
+// showed up in the header until the next full profile fetch. Google/Facebook/
+// GitHub login never had this bug because it goes through GET /me instead,
+// which already used toSafeUser.
+const { toSafeUser } = require("../lib/serializeUser");
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const TOKEN_EXPIRY = "7d";
@@ -13,14 +21,12 @@ function signToken(user) {
   });
 }
 
-// Strip sensitive fields before ever sending a user object back to the client.
-function toPublicUser(user) {
-  const { password, otpCodeHash, otpExpiresAt, ...rest } = user;
-  return rest;
-}
-
 function generateOtp() {
-  return String(Math.floor(100000 + Math.random() * 900000)); // 6 digits
+  // crypto.randomInt() instead of Math.random() — Math.random() isn't
+  // cryptographically secure, so its output can be predicted, which matters
+  // here since the OTP is a security code. randomInt gives a uniformly
+  // distributed 6-digit number from a secure source instead.
+  return String(crypto.randomInt(100000, 1000000)); // 6 digits
 }
 
 async function issueAndSendOtp(user) {
@@ -93,7 +99,7 @@ async function verifyOtp(req, res) {
 
     if (user.emailVerified) {
       const token = signToken(user);
-      return res.status(200).json({ token, user: toPublicUser(user) });
+      return res.status(200).json({ token, user: toSafeUser(user) });
     }
 
     if (!user.otpCodeHash || !user.otpExpiresAt) {
@@ -115,7 +121,7 @@ async function verifyOtp(req, res) {
     });
 
     const token = signToken(updatedUser);
-    return res.status(200).json({ token, user: toPublicUser(updatedUser) });
+    return res.status(200).json({ token, user: toSafeUser(updatedUser) });
   } catch (err) {
     console.error("Verify OTP error:", err);
     return res.status(500).json({ error: "เกิดข้อผิดพลาดในเซิร์ฟเวอร์" });
@@ -184,7 +190,7 @@ async function login(req, res) {
     }
 
     const token = signToken(user);
-    return res.status(200).json({ token, user: toPublicUser(user) });
+    return res.status(200).json({ token, user: toSafeUser(user) });
   } catch (err) {
     console.error("Login error:", err);
     return res.status(500).json({ error: "เกิดข้อผิดพลาดในเซิร์ฟเวอร์" });

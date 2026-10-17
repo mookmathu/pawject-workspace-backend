@@ -1,5 +1,8 @@
 const prisma = require("../lib/prisma");
-const { getAccessibleBoard, getMembership } = require("../lib/permissions");
+const { getAccessibleBoard, getMembership, canEditTask } = require("../lib/permissions");
+const { createNotification } = require("../lib/notify");
+
+const NOT_ASSIGNEE_ERROR = "งานนี้ถูกมอบหมายแล้ว ขอสงวนสิทธิ์แก้ไขให้เฉพาะผู้รับผิดชอบกับ Head กลุ่มนะคะ — ใครจะคอมเมนต์ก็ตามสบายเลย";
 
 const TASK_INCLUDE = {
   subtasks: { orderBy: { createdAt: "asc" } },
@@ -13,15 +16,18 @@ const TASK_INCLUDE = {
 
 // Every task/subtask mutation below re-checks that the requester is a
 // member of the task's board's workspace — task ids are just UUIDs a
-// client could guess or reuse from another account.
+// client could guess or reuse from another account. Returns the task
+// together with the requester's membership row (role + userId), which
+// callers that mutate the task need anyway to run canEditTask().
 async function loadAccessibleTask(taskId, userId) {
   const task = await prisma.task.findUnique({
     where: { id: taskId },
     include: { board: true },
   });
   if (!task) return null;
-  const member = await getMembership(task.board.workspaceId, userId);
-  return member ? task : null;
+  const membership = await getMembership(task.board.workspaceId, userId);
+  if (!membership) return null;
+  return { task, membership };
 }
 
 async function assertColumnBelongsToBoard(statusId, boardId) {
@@ -93,11 +99,14 @@ async function updateTask(req, res) {
     if (!existing) {
       return res.status(404).json({ error: "ไม่พบงานนี้" });
     }
+    if (!canEditTask(existing.task, existing.membership)) {
+      return res.status(403).json({ error: NOT_ASSIGNEE_ERROR });
+    }
 
-    if (statusId !== undefined && !(await assertColumnBelongsToBoard(statusId, existing.boardId))) {
+    if (statusId !== undefined && !(await assertColumnBelongsToBoard(statusId, existing.task.boardId))) {
       return res.status(400).json({ error: "สถานะไม่ถูกต้อง" });
     }
-    if (assigneeId !== undefined && !(await assertAssigneeIsMember(assigneeId, existing.board.workspaceId))) {
+    if (assigneeId !== undefined && !(await assertAssigneeIsMember(assigneeId, existing.task.board.workspaceId))) {
       return res.status(400).json({ error: "ผู้รับผิดชอบต้องเป็นสมาชิกในกลุ่มนี้" });
     }
 
@@ -116,6 +125,23 @@ async function updateTask(req, res) {
       include: TASK_INCLUDE,
     });
 
+    // Tell the new assignee — but only when someone actually just handed
+    // them the task (a real change, not resubmitting the same value), and
+    // not when they assigned it to themselves.
+    if (
+      assigneeId !== undefined &&
+      task.assigneeId &&
+      task.assigneeId !== existing.task.assigneeId &&
+      task.assigneeId !== req.userId
+    ) {
+      createNotification({
+        userId: task.assigneeId,
+        type: "task_assigned",
+        title: `คุณได้รับมอบหมายงาน "${task.title}"`,
+        link: { type: "task", taskId: task.id, boardId: task.boardId, workspaceId: existing.task.board.workspaceId },
+      });
+    }
+
     return res.status(200).json({ task });
   } catch (err) {
     console.error("Update task error:", err);
@@ -130,6 +156,9 @@ async function deleteTask(req, res) {
     const existing = await loadAccessibleTask(taskId, req.userId);
     if (!existing) {
       return res.status(404).json({ error: "ไม่พบงานนี้" });
+    }
+    if (!canEditTask(existing.task, existing.membership)) {
+      return res.status(403).json({ error: NOT_ASSIGNEE_ERROR });
     }
 
     await prisma.taskComment.deleteMany({ where: { taskId } });
@@ -155,6 +184,9 @@ async function addSubtask(req, res) {
     const existing = await loadAccessibleTask(taskId, req.userId);
     if (!existing) {
       return res.status(404).json({ error: "ไม่พบงานนี้" });
+    }
+    if (!canEditTask(existing.task, existing.membership)) {
+      return res.status(403).json({ error: NOT_ASSIGNEE_ERROR });
     }
 
     const subtask = await prisma.subtask.create({
@@ -183,6 +215,9 @@ async function updateSubtask(req, res) {
     const member = await getMembership(subtask.task.board.workspaceId, req.userId);
     if (!member) {
       return res.status(404).json({ error: "ไม่พบ subtask นี้" });
+    }
+    if (!canEditTask(subtask.task, member)) {
+      return res.status(403).json({ error: NOT_ASSIGNEE_ERROR });
     }
 
     const updated = await prisma.subtask.update({
@@ -215,6 +250,9 @@ async function deleteSubtask(req, res) {
     if (!member) {
       return res.status(404).json({ error: "ไม่พบ subtask นี้" });
     }
+    if (!canEditTask(subtask.task, member)) {
+      return res.status(403).json({ error: NOT_ASSIGNEE_ERROR });
+    }
 
     await prisma.subtask.delete({ where: { id: subtaskId } });
 
@@ -244,6 +282,19 @@ async function addComment(req, res) {
       include: { author: { select: { id: true, username: true, name: true } } },
     });
 
+    // Only the assignee is notified — they're the one whose task this
+    // comment landed on. (If they're the one commenting, there's no one to
+    // tell.)
+    if (existing.task.assigneeId && existing.task.assigneeId !== req.userId) {
+      createNotification({
+        userId: existing.task.assigneeId,
+        type: "task_comment",
+        title: `${comment.author.name} คอมเมนต์ในงาน "${existing.task.title}"`,
+        body: comment.content.slice(0, 140),
+        link: { type: "task", taskId, boardId: existing.task.boardId, workspaceId: existing.task.board.workspaceId },
+      });
+    }
+
     return res.status(201).json({ comment });
   } catch (err) {
     console.error("Add comment error:", err);
@@ -271,6 +322,49 @@ async function deleteComment(req, res) {
   }
 }
 
+// Every non-archived, not-yet-done task assigned to me, across every board
+// I can see — powers the Home page's "งานใกล้ครบกำหนดของฉัน" dashboard
+// section. Sorted with a due date first (soonest first); tasks with no due
+// date trail behind those, since there's nothing to be "soon" about.
+async function getMyTasks(req, res) {
+  try {
+    const tasks = await prisma.task.findMany({
+      where: { assigneeId: req.userId, archivedAt: null },
+      include: {
+        board: { include: { workspace: { select: { id: true, name: true, isPersonal: true } } } },
+        statusColumn: { select: { isDoneColumn: true } },
+        categoryRef: true,
+      },
+    });
+
+    const shaped = tasks
+      .map((t) => ({
+        id: t.id,
+        title: t.title,
+        dueDate: t.dueDate,
+        priority: t.priority,
+        boardId: t.boardId,
+        workspaceId: t.board.workspaceId,
+        workspaceName: t.board.workspace.isPersonal ? "ของฉัน" : t.board.workspace.name,
+        categoryRef: t.categoryRef,
+        isDoneColumn: t.statusColumn?.isDoneColumn || false,
+      }))
+      .filter((t) => !t.isDoneColumn)
+      .sort((a, b) => {
+        if (!a.dueDate && !b.dueDate) return 0;
+        if (!a.dueDate) return 1;
+        if (!b.dueDate) return -1;
+        return new Date(a.dueDate) - new Date(b.dueDate);
+      })
+      .slice(0, 30);
+
+    return res.status(200).json({ tasks: shaped });
+  } catch (err) {
+    console.error("Get my tasks error:", err);
+    return res.status(500).json({ error: "เกิดข้อผิดพลาดในเซิร์ฟเวอร์" });
+  }
+}
+
 module.exports = {
   createTask,
   updateTask,
@@ -280,4 +374,5 @@ module.exports = {
   deleteSubtask,
   addComment,
   deleteComment,
+  getMyTasks,
 };

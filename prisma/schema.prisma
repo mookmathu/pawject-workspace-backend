@@ -22,6 +22,17 @@ model User {
   resetTokenExpiresAt DateTime?
   provider       String    @default("local") // "local" | "google" | "facebook" | "github"
   providerId     String?   // the provider's own user id — null for local accounts
+  avatarData      Bytes?    // the actual image bytes, stored in the DB (bytea in Postgres) instead of on disk
+  avatarMimeType  String?   // e.g. "image/png" — needed to serve avatarData back with the right Content-Type
+  avatarUpdatedAt DateTime? // bumped on every upload — used as a cache-busting query param on the avatar URL
+  themeColor     String?   // hex accent color the user picked, e.g. "#3E6BE0" — null = use the app default
+  usernameChangeCount Int  @default(0) // capped at 3 edits (see updateProfile) — the initial set via register/completeProfile doesn't count
+  bio            String?   // short personal blurb, shown on the profile (subject to hiddenFields below)
+  // Which of ["email","org","bio"] this user has chosen to hide from other
+  // users (friends, workspace members, chat senders, friend requests, ...).
+  // Enforced in one place — see toPublicUser() in lib/serializeUser.js —
+  // never by trimming fields ad-hoc in individual controllers.
+  hiddenFields   Json      @default("[]")
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
@@ -37,6 +48,85 @@ model User {
   receivedFriendRequests FriendRequest[] @relation("FriendRequestReceiver")
   assignedTasks          Task[]          @relation("TaskAssignee")
   taskComments           TaskComment[]
+  sentMessages           Message[]
+  dmConversationsAsA     Conversation[]  @relation("DmUserA")
+  dmConversationsAsB     Conversation[]  @relation("DmUserB")
+  conversationReads      ConversationRead[]
+  notifications          Notification[]
+  activityDays           UserActivityDay[]
+  moodEntries            MoodEntry[]
+}
+
+// One in-app notification — task assignments, new comments on a task
+// someone's assigned to, and new chat messages. `link` carries just enough
+// structured data (ids) for the frontend to jump straight to the right
+// place; `body` is a short preview (a comment's text, a message's text),
+// optional since not every notification has one.
+model Notification {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id])
+  type      String    // "task_assigned" | "task_comment" | "message"
+  title     String
+  body      String?
+  link      Json?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+}
+
+// A chat thread. Either a group chat tied 1:1 to a Workspace (workspaceId
+// set, userA/userB null), or a 1-1 DM between two friends (userA/userB set,
+// workspaceId null) — never both. Both kinds are created lazily: the first
+// time someone opens a workspace's chat or a friend's DM, the API finds the
+// existing Conversation row or creates one on the spot, so there's nothing
+// to set up ahead of time when a workspace or friendship is created.
+model Conversation {
+  id          String    @id @default(uuid())
+  workspaceId String?   @unique
+  workspace   Workspace? @relation(fields: [workspaceId], references: [id])
+  userAId     String?
+  userA       User?     @relation("DmUserA", fields: [userAId], references: [id])
+  userBId     String?
+  userB       User?     @relation("DmUserB", fields: [userBId], references: [id])
+  messages    Message[]
+  reads       ConversationRead[]
+  createdAt   DateTime  @default(now())
+
+  // Same userA/userB-sorted-pair convention as Friendship — keeps exactly
+  // one DM conversation per pair of people no matter who opens it first.
+  @@unique([userAId, userBId])
+}
+
+model Message {
+  id             String       @id @default(uuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+  senderId       String
+  sender         User         @relation(fields: [senderId], references: [id])
+  // A message is text, an attachment, or both — but never neither (enforced
+  // in the controller, not the schema). content is now optional so an
+  // attachment-only message (just a photo, no caption) is valid.
+  content        String?
+  // The attachment's bytes, stored in the DB just like User.avatarData —
+  // same reasoning: no disk/blob storage to manage on the free tier.
+  attachmentData     Bytes?
+  attachmentMimeType String?  // e.g. "image/png" or "application/pdf"
+  attachmentName     String?  // original filename, shown for non-image files
+  createdAt      DateTime     @default(now())
+}
+
+// One row per (conversation, user) marking how far that user has read —
+// updated to "now" whenever they open the conversation. Unread count for a
+// conversation is just "messages created after this row's lastReadAt".
+model ConversationRead {
+  id             String       @id @default(uuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+  userId         String
+  user           User         @relation(fields: [userId], references: [id])
+  lastReadAt     DateTime     @default(now())
+
+  @@unique([conversationId, userId])
 }
 
 // Same org/university — adding someone connects you both immediately.
@@ -75,6 +165,18 @@ model Workspace {
   owner      User              @relation("WorkspaceOwner", fields: [ownerId], references: [id])
   members    WorkspaceMember[]
   board      Board?
+  chat       Conversation?
+  // The group's photo, shown in Home's workspace cards and the chat
+  // sidebar — same "store bytes in the row" pattern as User.avatarData.
+  // Owner-only to change (see workspace.controller.js's uploadWorkspaceImage).
+  imageData      Bytes?
+  imageMimeType  String?
+  imageUpdatedAt DateTime?
+  // Short random code anyone can use to join without being invited by
+  // username — regenerating it (owner-only) invalidates the old one, same
+  // idea as a rotating invite link. Null only for personal workspaces,
+  // which are never joinable.
+  joinCode       String?           @unique
   createdAt  DateTime          @default(now())
 }
 
@@ -201,4 +303,35 @@ model EventAttendee {
   createdAt DateTime @default(now())
 
   @@unique([eventId, userId])
+}
+
+// One row per user per calendar day (Asia/Bangkok) they were active in the
+// app — powers the contribution-style heatmap on the Profile page.
+// `count` is the number of ~5-minute windows with at least one request, so
+// it works as a rough "how much did they use it that day" intensity.
+model UserActivityDay {
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+  day    String // "YYYY-MM-DD"
+  count  Int    @default(1)
+
+  @@id([userId, day])
+}
+
+
+// One mood check-in per user per day (private to the owner). `mood` is a
+// key such as "great" / "tired" (the frontend maps it to an emoji); an
+// optional note and an optional meme image (stored in the row like avatars).
+model MoodEntry {
+  userId        String
+  user          User     @relation(fields: [userId], references: [id])
+  day           String // "YYYY-MM-DD" in Asia/Bangkok
+  mood          String
+  note          String?
+  imageData     Bytes?
+  imageMimeType String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@id([userId, day])
 }

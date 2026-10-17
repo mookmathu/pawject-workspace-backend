@@ -15,4 +15,15 @@ async function getAccessibleBoard(boardId, userId) {
   return member ? board : null;
 }
 
-module.exports = { getMembership, getAccessibleBoard };
+// Once a task has an assignee, only that assignee or the workspace's owner
+// ("Head" in the UI) may edit it (fields, status, subtasks) or delete it —
+// everyone else who can see the board can still view the task and comment
+// on it, just not change it. A task with no assignee yet has no such
+// restriction: any member can work on it, same as before this existed.
+function canEditTask(task, membership) {
+  if (!task.assigneeId) return true;
+  if (membership.role === "owner") return true;
+  return task.assigneeId === membership.userId;
+}
+
+module.exports = { getMembership, getAccessibleBoard, canEditTask };
