@@ -14,6 +14,13 @@ const { toSafeUser } = require("../lib/serializeUser");
 const JWT_SECRET = process.env.JWT_SECRET;
 const TOKEN_EXPIRY = "7d";
 const OTP_TTL_MINUTES = 10;
+const OTP_RESEND_COOLDOWN_SECONDS = 30;
+const MAX_OTP_ATTEMPTS = 5;
+
+// Wrong-code counter per email. Without a cap, a 6-digit code could be
+// brute-forced inside its 10-minute window. In-memory is enough here: a
+// server restart just resets the counter, and the code still expires.
+const otpAttempts = new Map();
 
 function signToken(user) {
   return jwt.sign({ sub: user.id, email: user.email }, JWT_SECRET, {
@@ -29,7 +36,8 @@ function generateOtp() {
   return String(crypto.randomInt(100000, 1000000)); // 6 digits
 }
 
-async function issueAndSendOtp(user) {
+async function issueAndSendOtp(user, purpose = "verify") {
+  otpAttempts.delete(user.email);
   const otpCode = generateOtp();
   const otpCodeHash = await bcrypt.hash(otpCode, 10);
   const otpExpiresAt = new Date(Date.now() + OTP_TTL_MINUTES * 60 * 1000);
@@ -39,7 +47,7 @@ async function issueAndSendOtp(user) {
     data: { otpCodeHash, otpExpiresAt },
   });
 
-  await sendOtpEmail(user.email, otpCode);
+  await sendOtpEmail(user.email, otpCode, purpose);
 }
 
 async function register(req, res) {
@@ -97,11 +105,10 @@ async function verifyOtp(req, res) {
       return res.status(404).json({ error: "ไม่พบบัญชีนี้" });
     }
 
-    if (user.emailVerified) {
-      const token = signToken(user);
-      return res.status(200).json({ token, user: toSafeUser(user) });
-    }
-
+    // A token is only ever handed out against a real, unexpired code — also
+    // for accounts that are already verified (social login asks for a code on
+    // every sign-in). There is deliberately no "already verified, here's a
+    // token" shortcut: that would let anyone who knows an email sign in as it.
     if (!user.otpCodeHash || !user.otpExpiresAt) {
       return res.status(400).json({ error: "กรุณาขอรหัสยืนยันใหม่" });
     }
@@ -110,11 +117,19 @@ async function verifyOtp(req, res) {
       return res.status(400).json({ error: "รหัสยืนยันหมดอายุแล้ว กรุณาขอรหัสใหม่" });
     }
 
-    const otpMatches = await bcrypt.compare(otp, user.otpCodeHash);
+    const otpMatches = await bcrypt.compare(String(otp), user.otpCodeHash);
     if (!otpMatches) {
+      const tries = (otpAttempts.get(email) || 0) + 1;
+      if (tries >= MAX_OTP_ATTEMPTS) {
+        otpAttempts.delete(email);
+        await prisma.user.update({ where: { id: user.id }, data: { otpCodeHash: null, otpExpiresAt: null } });
+        return res.status(400).json({ error: "กรอกรหัสผิดหลายครั้งเกินไป กรุณาขอรหัสใหม่" });
+      }
+      otpAttempts.set(email, tries);
       return res.status(400).json({ error: "รหัสยืนยันไม่ถูกต้อง" });
     }
 
+    otpAttempts.delete(email);
     const updatedUser = await prisma.user.update({
       where: { id: user.id },
       data: { emailVerified: true, otpCodeHash: null, otpExpiresAt: null },
@@ -140,11 +155,22 @@ async function resendOtp(req, res) {
       return res.status(404).json({ error: "ไม่พบบัญชีนี้" });
     }
 
-    if (user.emailVerified) {
+    // An already-verified account only gets a new code while a sign-in is in
+    // progress (it has a pending code) — otherwise anyone could make us email
+    // a stranger's inbox just by typing their address.
+    if (user.emailVerified && !user.otpCodeHash) {
       return res.status(400).json({ error: "อีเมลนี้ยืนยันแล้ว" });
     }
 
-    await issueAndSendOtp(user);
+    // Server-side cooldown (the 30s timer on the page is only cosmetic).
+    if (user.otpExpiresAt) {
+      const issuedAt = user.otpExpiresAt.getTime() - OTP_TTL_MINUTES * 60 * 1000;
+      if (Date.now() - issuedAt < OTP_RESEND_COOLDOWN_SECONDS * 1000) {
+        return res.status(429).json({ error: "กรุณารอสักครู่ก่อนขอรหัสใหม่" });
+      }
+    }
+
+    await issueAndSendOtp(user, user.emailVerified ? "login" : "verify");
     return res.status(200).json({ message: "ส่งรหัสยืนยันใหม่แล้ว" });
   } catch (err) {
     console.error("Resend OTP error:", err);
@@ -212,4 +238,4 @@ async function checkUsername(req, res) {
   }
 }
 
-module.exports = { register, login, checkUsername, verifyOtp, resendOtp };
+module.exports = { register, login, checkUsername, verifyOtp, resendOtp, issueAndSendOtp };

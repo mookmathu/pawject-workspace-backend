@@ -7,15 +7,20 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 // domain on resend.com/domains, replace this with e.g. "Pawject <noreply@yourdomain.com>".
 const FROM_ADDRESS = process.env.RESEND_FROM || "Pawject <onboarding@resend.dev>";
 
-async function sendOtpEmail(toEmail, otpCode) {
+async function sendOtpEmail(toEmail, otpCode, purpose = "verify") {
+  const isLogin = purpose === "login";
+  const heading = isLogin ? "ยืนยันการเข้าสู่ระบบ" : "ยืนยันอีเมลของคุณ";
+  const lead = isLogin
+    ? "ใช้รหัสด้านล่างเพื่อเข้าสู่ระบบ Pawject (หากคุณไม่ได้เป็นผู้ขอ ให้ละเว้นอีเมลนี้):"
+    : "ใช้รหัสด้านล่างเพื่อยืนยันอีเมลของคุณใน Pawject:";
   const { error } = await resend.emails.send({
     from: FROM_ADDRESS,
     to: toEmail,
     subject: `${otpCode} คือรหัสยืนยันของคุณ — Pawject`,
     html: `
       <div style="font-family: sans-serif; max-width: 420px; margin: 0 auto;">
-        <h2 style="color: #221D17;">ยืนยันอีเมลของคุณ</h2>
-        <p>ใช้รหัสด้านล่างเพื่อยืนยันอีเมลของคุณใน Pawject:</p>
+        <h2 style="color: #221D17;">${heading}</h2>
+        <p>${lead}</p>
         <p style="font-size: 32px; font-weight: 700; letter-spacing: 6px; color: #3E6BE0;">
           ${otpCode}
         </p>

@@ -1,13 +1,34 @@
 const express = require("express");
 const jwt = require("jsonwebtoken");
 const passport = require("../lib/passport");
+const { issueAndSendOtp } = require("../controllers/auth.controller");
 
 const router = express.Router();
 
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
 
-function issueTokenAndRedirect(req, res) {
+// Social sign-ins don't get a token straight away: we email a 6-digit code and
+// send the browser to the OTP page; the token is only issued by POST
+// /api/auth/verify-otp once the code is right. The exception is an account
+// with no real email (GitHub with a private email, Facebook without one) —
+// there's nowhere to send a code, so those keep the old direct sign-in.
+function hasRealEmail(user) {
+  return !!user.email && !user.email.endsWith("@no-email.crewspace.local");
+}
+
+async function issueTokenAndRedirect(req, res) {
   const user = req.user;
+
+  if (hasRealEmail(user)) {
+    try {
+      await issueAndSendOtp(user, "login");
+      return res.redirect(`${FRONTEND_URL}/verify-otp?email=${encodeURIComponent(user.email)}&social=1`);
+    } catch (err) {
+      console.error("Failed to send social-login OTP:", err);
+      return res.redirect(`${FRONTEND_URL}/?oauthError=1`);
+    }
+  }
+
   // requireAuth reads payload.sub (the standard JWT "subject" claim), not a
   // custom "userId" field — must match how the existing login flow signs
   // tokens, or req.userId ends up undefined on every OAuth-issued token.
