@@ -7,6 +7,23 @@ const EVENT_INCLUDE = {
   },
 };
 
+const EVENT_LABELS = ["urgent", "important", "general", "personal", "idea"];
+const MASCOT_NAMES = ["ears", "puppy", "reader", "glasses", "artist", "scarf"];
+
+// A sticker is either "mascot:<known name>" or a short emoji string.
+// Returns { ok, value } — value is null when the sticker is cleared.
+function parseSticker(raw) {
+  if (raw === null || raw === undefined) return { ok: true, value: null };
+  if (typeof raw !== "string") return { ok: false };
+  const v = raw.trim();
+  if (!v) return { ok: true, value: null };
+  if (v.startsWith("mascot:")) {
+    return MASCOT_NAMES.includes(v.slice(7)) ? { ok: true, value: v } : { ok: false };
+  }
+  if (v.length > 16 || /[<>&"'`\\]/.test(v) || /^[A-Za-z0-9 ]+$/.test(v)) return { ok: false };
+  return { ok: true, value: v };
+}
+
 async function loadOwnedEvent(eventId, userId) {
   const event = await prisma.event.findUnique({ where: { id: eventId } });
   if (!event || event.ownerId !== userId) return null;
@@ -62,7 +79,7 @@ async function getEvents(req, res) {
 
 async function createEvent(req, res) {
   try {
-    const { title, description, startDate, endDate, isAllDay, attendeeUsernames } = req.body;
+    const { title, description, startDate, endDate, isAllDay, attendeeUsernames, label, sticker } = req.body;
 
     if (!title || !title.trim()) {
       return res.status(400).json({ error: "กรุณากรอกชื่อกิจกรรม" });
@@ -73,6 +90,14 @@ async function createEvent(req, res) {
 
     if (endDate && new Date(endDate) < new Date(startDate)) {
       return res.status(400).json({ error: "เวลาสิ้นสุดต้องไม่ก่อนเวลาเริ่มต้น" });
+    }
+
+    if (label !== undefined && !EVENT_LABELS.includes(label)) {
+      return res.status(400).json({ error: "ระดับของกิจกรรมไม่ถูกต้อง" });
+    }
+    const parsedSticker = parseSticker(sticker);
+    if (!parsedSticker.ok) {
+      return res.status(400).json({ error: "สติกเกอร์ไม่ถูกต้อง" });
     }
 
     // A double-click / retry can send the same create twice — if an identical
@@ -101,6 +126,8 @@ async function createEvent(req, res) {
         isAllDay: isAllDay !== undefined ? isAllDay : true,
         startDate: new Date(startDate),
         endDate: endDate ? new Date(endDate) : null,
+        label: label || "general",
+        sticker: parsedSticker.value,
         attendees: { create: userIds.map((userId) => ({ userId })) },
       },
       include: EVENT_INCLUDE,
@@ -116,7 +143,7 @@ async function createEvent(req, res) {
 async function updateEvent(req, res) {
   try {
     const { eventId } = req.params;
-    const { title, description, startDate, endDate, isAllDay, attendeeUsernames } = req.body;
+    const { title, description, startDate, endDate, isAllDay, attendeeUsernames, label, sticker } = req.body;
 
     const existing = await loadOwnedEvent(eventId, req.userId);
     if (!existing) {
@@ -127,6 +154,14 @@ async function updateEvent(req, res) {
     const nextEnd = endDate !== undefined ? endDate : existing.endDate;
     if (nextStart && nextEnd && new Date(nextEnd) < new Date(nextStart)) {
       return res.status(400).json({ error: "เวลาสิ้นสุดต้องไม่ก่อนเวลาเริ่มต้น" });
+    }
+
+    if (label !== undefined && !EVENT_LABELS.includes(label)) {
+      return res.status(400).json({ error: "ระดับของกิจกรรมไม่ถูกต้อง" });
+    }
+    const parsedSticker = sticker !== undefined ? parseSticker(sticker) : null;
+    if (parsedSticker && !parsedSticker.ok) {
+      return res.status(400).json({ error: "สติกเกอร์ไม่ถูกต้อง" });
     }
 
     let notFound = [];
@@ -151,6 +186,8 @@ async function updateEvent(req, res) {
         ...(isAllDay !== undefined ? { isAllDay } : {}),
         ...(startDate !== undefined ? { startDate: new Date(startDate) } : {}),
         ...(endDate !== undefined ? { endDate: endDate ? new Date(endDate) : null } : {}),
+        ...(label !== undefined ? { label } : {}),
+        ...(parsedSticker ? { sticker: parsedSticker.value } : {}),
       },
       include: EVENT_INCLUDE,
     });

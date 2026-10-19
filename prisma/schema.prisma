@@ -287,6 +287,8 @@ model Event {
   isAllDay    Boolean         @default(true)
   startDate   DateTime        // date, or date+time when isAllDay is false
   endDate     DateTime?       // optional — defaults to startDate if not given
+  label       String          @default("general") // "urgent" | "important" | "general" | "personal" | "idea" — drives the colour
+  sticker     String?         // an emoji, or "mascot:<name>" for one of the Pawject characters
   attendees   EventAttendee[]
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
