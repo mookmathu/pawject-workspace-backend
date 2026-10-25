@@ -27,6 +27,12 @@ model User {
   avatarUpdatedAt DateTime? // bumped on every upload — used as a cache-busting query param on the avatar URL
   themeColor     String?   // hex accent color the user picked, e.g. "#3E6BE0" — null = use the app default
   usernameChangeCount Int  @default(0) // capped at 3 edits (see updateProfile) — the initial set via register/completeProfile doesn't count
+  // The ID friends type to add this person. Chosen by the user (a-z, 0-9, _),
+  // unique, null until they create one. The first one is free; after that it
+  // can be changed twice (see setFriendId) — friendIdChangeCount counts only
+  // the changes, not the initial creation.
+  friendId            String?  @unique
+  friendIdChangeCount Int      @default(0)
   bio            String?   // short personal blurb, shown on the profile (subject to hiddenFields below)
   // Which of ["email","org","bio"] this user has chosen to hide from other
   // users (friends, workspace members, chat senders, friend requests, ...).

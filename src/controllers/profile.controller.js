@@ -12,66 +12,67 @@ const MAX_USERNAME_CHANGES = 3;
 
 const MAX_BIO_LENGTH = 280;
 
-// Daily-activity heatmap data. No `year` = the rolling last 365 days (what
-// the Profile page shows by default); `?year=2025` = that calendar year.
-async function getMyActivity(req, res) {
-  try {
-    const { dayKey } = require("../lib/activity");
-    const user = await prisma.user.findUnique({ where: { id: req.userId }, select: { createdAt: true } });
-    if (!user) return res.status(404).json({ error: "ไม่พบผู้ใช้นี้" });
+// Shared by the signed-in user's own heatmap and a friend's view of it.
+// Returns { status, body } so each caller just forwards it.
+async function buildActivity(userId, yearRaw) {
+  const { dayKey } = require("../lib/activity");
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { createdAt: true } });
+  if (!user) return { status: 404, body: { error: "ไม่พบผู้ใช้นี้" } };
 
-    const thisYear = Number(dayKey().slice(0, 4));
-    const joinYear = Number(dayKey(user.createdAt).slice(0, 4));
-    const year = req.query.year ? Number(req.query.year) : null;
-    if (year !== null && (!Number.isInteger(year) || year < joinYear || year > thisYear)) {
-      return res.status(400).json({ error: "ปีไม่ถูกต้อง" });
-    }
+  const thisYear = Number(dayKey().slice(0, 4));
+  const joinYear = Number(dayKey(user.createdAt).slice(0, 4));
+  const year = yearRaw ? Number(yearRaw) : null;
+  if (year !== null && (!Number.isInteger(year) || year < joinYear || year > thisYear)) {
+    return { status: 400, body: { error: "ปีไม่ถูกต้อง" } };
+  }
 
-    const today = dayKey();
-    let from;
-    let to;
-    if (year === null) {
-      const start = new Date(Date.now() - 364 * 24 * 60 * 60 * 1000);
-      from = dayKey(start);
-      to = today;
-    } else {
-      from = `${year}-01-01`;
-      to = year === thisYear ? today : `${year}-12-31`;
-    }
+  const today = dayKey();
+  let from;
+  let to;
+  if (year === null) {
+    const start = new Date(Date.now() - 364 * 24 * 60 * 60 * 1000);
+    from = dayKey(start);
+    to = today;
+  } else {
+    from = `${year}-01-01`;
+    to = year === thisYear ? today : `${year}-12-31`;
+  }
 
-    const rows = await prisma.userActivityDay.findMany({
-      where: { userId: req.userId, day: { gte: from, lte: to } },
-      orderBy: { day: "asc" },
-      select: { day: true, count: true },
-    });
+  const rows = await prisma.userActivityDay.findMany({
+    where: { userId, day: { gte: from, lte: to } },
+    orderBy: { day: "asc" },
+    select: { day: true, count: true },
+  });
 
-    // Streaks are over consecutive calendar days with activity.
-    const active = new Set(rows.map((r) => r.day));
-    const step = (key, delta) => {
-      const d = new Date(`${key}T00:00:00Z`);
-      d.setUTCDate(d.getUTCDate() + delta);
-      return d.toISOString().slice(0, 10);
-    };
-    let longest = 0;
-    let run = 0;
-    let prev = null;
-    rows.forEach((r) => {
-      run = prev && step(prev, 1) === r.day ? run + 1 : 1;
-      longest = Math.max(longest, run);
-      prev = r.day;
-    });
-    // "current" counts back from today (or from yesterday if today has no activity yet)
-    let current = 0;
-    let cursor = active.has(today) ? today : step(today, -1);
-    while (active.has(cursor)) {
-      current += 1;
-      cursor = step(cursor, -1);
-    }
+  // Streaks are over consecutive calendar days with activity.
+  const active = new Set(rows.map((r) => r.day));
+  const step = (key, delta) => {
+    const d = new Date(`${key}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + delta);
+    return d.toISOString().slice(0, 10);
+  };
+  let longest = 0;
+  let run = 0;
+  let prev = null;
+  rows.forEach((r) => {
+    run = prev && step(prev, 1) === r.day ? run + 1 : 1;
+    longest = Math.max(longest, run);
+    prev = r.day;
+  });
+  // "current" counts back from today (or from yesterday if today has no activity yet)
+  let current = 0;
+  let cursor = active.has(today) ? today : step(today, -1);
+  while (active.has(cursor)) {
+    current += 1;
+    cursor = step(cursor, -1);
+  }
 
-    const years = [];
-    for (let y = thisYear; y >= joinYear; y--) years.push(y);
+  const years = [];
+  for (let y = thisYear; y >= joinYear; y--) years.push(y);
 
-    return res.status(200).json({
+  return {
+    status: 200,
+    body: {
       from,
       to,
       days: rows,
@@ -80,9 +81,80 @@ async function getMyActivity(req, res) {
       currentStreak: year === null || year === thisYear ? current : 0,
       years,
       joinedAt: user.createdAt,
-    });
+    },
+  };
+}
+
+// Daily-activity heatmap data. No `year` = the rolling last 365 days (what
+// the Profile page shows by default); `?year=2025` = that calendar year.
+async function getMyActivity(req, res) {
+  try {
+    const { status, body } = await buildActivity(req.userId, req.query.year);
+    return res.status(status).json(body);
   } catch (err) {
     console.error("Get activity error:", err);
+    return res.status(500).json({ error: "เกิดข้อผิดพลาดในเซิร์ฟเวอร์" });
+  }
+}
+
+// A friend's heatmap — only for people who are friends with the viewer, and
+// only if the owner hasn't switched "activity" off in their privacy settings.
+// A hidden heatmap answers 403 { hidden: true } so the modal can say so
+// instead of showing a generic error.
+async function getUserActivity(req, res) {
+  try {
+    const { userId } = req.params;
+    if (userId !== req.userId) {
+      const [x, y] = [req.userId, userId].sort();
+      const friendship = await prisma.friendship.findUnique({ where: { userAId_userBId: { userAId: x, userBId: y } } });
+      if (!friendship) return res.status(403).json({ error: "ดูกิจกรรมได้เฉพาะเพื่อนเท่านั้น", notFriend: true });
+      const owner = await prisma.user.findUnique({ where: { id: userId }, select: { hiddenFields: true } });
+      if (!owner) return res.status(404).json({ error: "ไม่พบผู้ใช้นี้" });
+      const hidden = Array.isArray(owner.hiddenFields) ? owner.hiddenFields : [];
+      if (hidden.includes("activity")) return res.status(403).json({ error: "เจ้าของโปรไฟล์ซ่อนกิจกรรมไว้", hidden: true });
+    }
+    const { status, body } = await buildActivity(userId, req.query.year);
+    return res.status(status).json(body);
+  } catch (err) {
+    console.error("Get user activity error:", err);
+    return res.status(500).json({ error: "เกิดข้อผิดพลาดในเซิร์ฟเวอร์" });
+  }
+}
+
+const MAX_FRIEND_ID_CHANGES = 2;
+const FRIEND_ID_RE = /^[a-z0-9_]{4,20}$/;
+
+// Create / change the ID other people use to add this user as a friend.
+// Creating the first one is free; after that it can be changed
+// MAX_FRIEND_ID_CHANGES times in total per account.
+async function setFriendId(req, res) {
+  try {
+    const raw = typeof req.body.friendId === "string" ? req.body.friendId.trim().toLowerCase() : "";
+    if (!FRIEND_ID_RE.test(raw)) {
+      return res.status(400).json({ error: "ID ต้องมี 4–20 ตัว ใช้ได้เฉพาะ a-z, 0-9 และ _" });
+    }
+    const me = await prisma.user.findUnique({ where: { id: req.userId }, select: { friendId: true, friendIdChangeCount: true } });
+    if (!me) return res.status(404).json({ error: "ไม่พบผู้ใช้นี้" });
+    if (me.friendId === raw) {
+      return res.status(200).json({ friendId: me.friendId, changesLeft: Math.max(0, MAX_FRIEND_ID_CHANGES - me.friendIdChangeCount) });
+    }
+    const isChange = !!me.friendId;
+    if (isChange && me.friendIdChangeCount >= MAX_FRIEND_ID_CHANGES) {
+      return res.status(403).json({ error: `เปลี่ยน ID ได้สูงสุด ${MAX_FRIEND_ID_CHANGES} ครั้งต่อบัญชี และคุณใช้ครบแล้ว` });
+    }
+    try {
+      const updated = await prisma.user.update({
+        where: { id: req.userId },
+        data: { friendId: raw, ...(isChange ? { friendIdChangeCount: { increment: 1 } } : {}) },
+        select: { friendId: true, friendIdChangeCount: true },
+      });
+      return res.status(200).json({ friendId: updated.friendId, changesLeft: Math.max(0, MAX_FRIEND_ID_CHANGES - updated.friendIdChangeCount) });
+    } catch (err) {
+      if (err.code === "P2002") return res.status(409).json({ error: "ID นี้ถูกใช้แล้ว ลองชื่ออื่นดูนะ" });
+      throw err;
+    }
+  } catch (err) {
+    console.error("Set friend id error:", err);
     return res.status(500).json({ error: "เกิดข้อผิดพลาดในเซิร์ฟเวอร์" });
   }
 }
@@ -427,6 +499,8 @@ async function deleteAccount(req, res) {
 module.exports = {
   getMe,
   getMyActivity,
+  getUserActivity,
+  setFriendId,
   getPublicProfile,
   completeProfile,
   updateProfile,

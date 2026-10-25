@@ -26,15 +26,17 @@ async function getFriends(req, res) {
 
 async function addFriend(req, res) {
   try {
-    const { username } = req.body;
-    if (!username || !username.trim()) {
-      return res.status(400).json({ error: "กรุณาระบุ username" });
+    // Friends are added by the ID the other person created for that purpose
+    // (see setFriendId) — not by username.
+    const friendId = typeof req.body.friendId === "string" ? req.body.friendId.trim().toLowerCase().replace(/^@/, "") : "";
+    if (!friendId) {
+      return res.status(400).json({ error: "กรุณาระบุ ID เพื่อน" });
     }
 
     const me = await prisma.user.findUnique({ where: { id: req.userId } });
-    const targetUser = await prisma.user.findUnique({ where: { username: username.trim() } });
+    const targetUser = await prisma.user.findUnique({ where: { friendId } });
     if (!targetUser) {
-      return res.status(404).json({ error: `ไม่พบผู้ใช้ @${username.trim()}` });
+      return res.status(404).json({ error: `ไม่พบผู้ใช้ที่มี ID "${friendId}"` });
     }
     if (targetUser.id === req.userId) {
       return res.status(400).json({ error: "เพิ่มตัวเองเป็นเพื่อนไม่ได้" });

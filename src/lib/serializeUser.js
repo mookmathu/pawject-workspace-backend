@@ -26,6 +26,8 @@ const SAFE_SELECT = {
   avatarUpdatedAt: true,
   themeColor: true,
   usernameChangeCount: true,
+  friendId: true,
+  friendIdChangeCount: true,
 };
 
 function toSafeUser(user) {
@@ -73,7 +75,7 @@ const PUBLIC_USER_SELECT = {
 // Keep in sync with the toggles rendered on the Profile page's privacy
 // section. Email/provider aren't here — see the note on PUBLIC_USER_SELECT,
 // they're simply never shown to other people, so there's nothing to toggle.
-const HIDABLE_FIELDS = ["org", "bio"];
+const HIDABLE_FIELDS = ["org", "bio", "activity"];
 
 function toPublicUser(user) {
   if (!user) return user;
@@ -102,6 +104,8 @@ function toPublicUser(user) {
     pub.orgName = user.orgName;
   }
   if (!hidden.includes("bio")) pub.bio = user.bio;
+  // Tells the profile window whether to even ask for the heatmap.
+  pub.activityVisible = !hidden.includes("activity");
 
   return pub;
 }

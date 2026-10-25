@@ -98,6 +98,13 @@ async function markRead(conversationId, userId) {
   }
 }
 
+// Stickers are sent as the text "[[sticker:<id>]]" — show a readable preview
+// in notifications instead of the raw token.
+function previewOf(content, file) {
+  if (content && /^\[\[sticker:[a-z]+\]\]$/.test(content)) return "ส่งสติกเกอร์";
+  return content ? content.slice(0, 140) : file ? "📎 ไฟล์แนบ" : "";
+}
+
 // After a message is saved, nudges everyone who can see this conversation
 // but isn't the sender — so their unread badge updates live even if they
 // don't currently have this chat open (and so aren't in its room) — and
@@ -192,7 +199,7 @@ async function sendWorkspaceMessage(req, res) {
     const serialized = serializeMessage(message);
 
     emitToRoom(workspaceRoomName(workspaceId), "message:new", serialized);
-    const preview = content ? content.slice(0, 140) : file ? "📎 ไฟล์แนบ" : "";
+    const preview = previewOf(content, file);
     bumpUnread(workspaceId, null, req.userId, serialized.sender.name, preview).catch((err) =>
       console.error("Bump unread error:", err)
     );
@@ -256,7 +263,7 @@ async function sendDmMessage(req, res) {
     const serialized = serializeMessage(message);
 
     emitToRoom(dmRoomName(req.userId, otherUserId), "message:new", serialized);
-    const preview = content ? content.slice(0, 140) : file ? "📎 ไฟล์แนบ" : "";
+    const preview = previewOf(content, file);
     bumpUnread(null, [req.userId, otherUserId], req.userId, serialized.sender.name, preview).catch((err) =>
       console.error("Bump unread error:", err)
     );

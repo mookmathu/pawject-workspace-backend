@@ -3,6 +3,8 @@ const requireAuth = require("../middleware/requireAuth");
 const {
   getMe,
   getMyActivity,
+  getUserActivity,
+  setFriendId,
   getPublicProfile,
   completeProfile,
   updateProfile,
@@ -20,12 +22,15 @@ router.get("/me/activity", requireAuth, getMyActivity);
 router.patch("/complete-profile", requireAuth, completeProfile);
 router.patch("/me", requireAuth, updateProfile);
 router.patch("/me/theme", requireAuth, updateTheme);
+router.patch("/me/friend-id", requireAuth, setFriendId);
 router.post("/me/avatar", requireAuth, uploadAvatar.single("avatar"), uploadAvatarHandler);
 router.delete("/me", requireAuth, deleteAccount);
 
 // Another user's public profile card — requires login (unlike the avatar
 // route below) so it can't be scraped from outside the app.
 router.get("/:userId/profile", requireAuth, getPublicProfile);
+// A friend's activity heatmap — friends only, and only if they left it visible.
+router.get("/:userId/activity", requireAuth, getUserActivity);
 
 // Public (no auth) — serves the raw image bytes so a plain <img src> can
 // load it directly, same as the old static-file URL did.
