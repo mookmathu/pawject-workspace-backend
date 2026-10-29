@@ -1,0 +1,38 @@
+name: SonarCloud
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  sonar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # needed so Prisma-using modules can be imported by tests (no DB connection is made)
+      - run: npx prisma generate
+
+      # writes coverage/lcov.info (jest)
+      - name: Run tests with coverage
+        run: npx jest --coverage --coverageReporters=lcov --collectCoverageFrom="src/**/*.js"
+        env:
+          NODE_ENV: test
+          JWT_SECRET: test-secret
+          DATABASE_URL: postgresql://user:pass@localhost:5432/test
+
+      - name: SonarCloud scan
+        uses: SonarSource/sonarqube-scan-action@v5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
