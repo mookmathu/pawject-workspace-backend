@@ -3,7 +3,7 @@ const crypto = require("crypto");
 const prisma = require("../lib/prisma");
 const { sendPasswordResetEmail } = require("../lib/resetEmail");
 
-const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
+const FRONTEND_URL = (process.env.FRONTEND_URL || "http://localhost:3000").replace(/\/+$/, "");
 const RESET_TOKEN_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
 async function forgotPassword(req, res) {

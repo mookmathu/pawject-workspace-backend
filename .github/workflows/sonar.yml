@@ -26,7 +26,7 @@ jobs:
 
       # writes coverage/lcov.info (jest)
       - name: Run tests with coverage
-        run: npx jest --coverage --coverageReporters=lcov --collectCoverageFrom="src/**/*.js"
+        run: npx jest --coverage --coverageReporters=lcov --coverageReporters=text-summary
         env:
           NODE_ENV: test
           JWT_SECRET: test-secret

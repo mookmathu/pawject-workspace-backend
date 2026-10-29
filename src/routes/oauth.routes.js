@@ -5,7 +5,8 @@ const { issueAndSendOtp } = require("../controllers/auth.controller");
 
 const router = express.Router();
 
-const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
+// Trailing slash stripped so a FRONTEND_URL written as "https://x.tech/" doesn't produce "//" in redirects.
+const FRONTEND_URL = (process.env.FRONTEND_URL || "http://localhost:3000").replace(/\/+$/, "");
 
 // Social sign-ins don't get a token straight away: we email a 6-digit code and
 // send the browser to the OTP page; the token is only issued by POST
