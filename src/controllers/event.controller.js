@@ -58,8 +58,8 @@ async function getEvents(req, res) {
 
     let where = visibility;
     if (year && month) {
-      const y = parseInt(year, 10);
-      const m = parseInt(month, 10);
+      const y = Number.parseInt(year, 10);
+      const m = Number.parseInt(month, 10);
       const start = new Date(Date.UTC(y, m - 1, 1));
       const end = new Date(Date.UTC(y, m, 1));
       where = { AND: [visibility, { startDate: { gte: start, lt: end } }] };

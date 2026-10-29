@@ -39,7 +39,7 @@ async function listMood(req, res) {
       if (!MONTH_RE.test(month)) return res.status(400).json({ error: "รูปแบบเดือนไม่ถูกต้อง" });
       where = { userId: req.userId, day: { startsWith: `${month}-` } };
     } else {
-      const n = Math.min(Math.max(parseInt(recent, 10) || 90, 1), 400);
+      const n = Math.min(Math.max(Number.parseInt(recent, 10) || 90, 1), 400);
       const from = dayKey(new Date(Date.now() - n * 86400000));
       where = { userId: req.userId, day: { gte: from } };
     }

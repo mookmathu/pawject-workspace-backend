@@ -1,5 +1,6 @@
 const prisma = require("../lib/prisma");
 const { PUBLIC_USER_SELECT, toPublicUser } = require("../lib/serializeUser");
+const { orderedPair } = require("../lib/pair");
 
 const USER_PUBLIC_SELECT = PUBLIC_USER_SELECT;
 
@@ -42,7 +43,7 @@ async function addFriend(req, res) {
       return res.status(400).json({ error: "เพิ่มตัวเองเป็นเพื่อนไม่ได้" });
     }
 
-    const [a, b] = [req.userId, targetUser.id].sort();
+    const [a, b] = orderedPair(req.userId, targetUser.id);
     const existingFriendship = await prisma.friendship.findUnique({
       where: { userAId_userBId: { userAId: a, userBId: b } },
     });
@@ -84,7 +85,7 @@ async function addFriend(req, res) {
 async function removeFriend(req, res) {
   try {
     const { userId } = req.params;
-    const [a, b] = [req.userId, userId].sort();
+    const [a, b] = orderedPair(req.userId, userId);
 
     await prisma.friendship.deleteMany({ where: { userAId: a, userBId: b } });
     return res.status(200).json({ message: "ลบเพื่อนแล้ว" });
@@ -123,7 +124,7 @@ async function acceptFriendRequest(req, res) {
       return res.status(404).json({ error: "ไม่พบคำขอเป็นเพื่อนนี้" });
     }
 
-    const [a, b] = [request.senderId, request.receiverId].sort();
+    const [a, b] = orderedPair(request.senderId, request.receiverId);
     await prisma.$transaction([
       prisma.friendship.upsert({
         where: { userAId_userBId: { userAId: a, userBId: b } },

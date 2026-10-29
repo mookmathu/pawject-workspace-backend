@@ -52,17 +52,17 @@ function initSocket(httpServer) {
     // A personal room, independent of whatever chat window is open — used
     // for events aimed at "this user" specifically (unread badge bumps),
     // as opposed to "everyone looking at this conversation right now".
-    socket.join(`user:${socket.userId}`);
+    void socket.join(`user:${socket.userId}`);
     markOnline(socket.userId);
 
     // The client decides which rooms it cares about (one per workspace chat
     // or DM it currently has open) and joins/leaves them itself, rather than
     // the server trying to guess from the connection alone.
     socket.on("room:join", (room) => {
-      if (typeof room === "string") socket.join(room);
+      if (typeof room === "string") void socket.join(room);
     });
     socket.on("room:leave", (room) => {
-      if (typeof room === "string") socket.leave(room);
+      if (typeof room === "string") void socket.leave(room);
     });
 
     // Lets a client ask "who's online right now" once, on load, instead of

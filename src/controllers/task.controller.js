@@ -134,7 +134,7 @@ async function updateTask(req, res) {
       task.assigneeId !== existing.task.assigneeId &&
       task.assigneeId !== req.userId
     ) {
-      createNotification({
+      void createNotification({
         userId: task.assigneeId,
         type: "task_assigned",
         title: `คุณได้รับมอบหมายงาน "${task.title}"`,
@@ -286,7 +286,7 @@ async function addComment(req, res) {
     // comment landed on. (If they're the one commenting, there's no one to
     // tell.)
     if (existing.task.assigneeId && existing.task.assigneeId !== req.userId) {
-      createNotification({
+      void createNotification({
         userId: existing.task.assigneeId,
         type: "task_comment",
         title: `${comment.author.name} คอมเมนต์ในงาน "${existing.task.title}"`,

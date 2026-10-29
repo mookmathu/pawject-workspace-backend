@@ -4,6 +4,7 @@ const prisma = require("../lib/prisma");
 // auth.controller.js — see that file for why (avatarUrl was previously only
 // computed here, so logging in via email showed no avatar photo).
 const { SAFE_SELECT, toSafeUser, PUBLIC_USER_SELECT, toPublicUser, HIDABLE_FIELDS } = require("../lib/serializeUser");
+const { orderedPair } = require("../lib/pair");
 
 // The initial username (set at registration, or via completeProfile right
 // after a first OAuth login) doesn't count — only edits made afterward
@@ -105,7 +106,7 @@ async function getUserActivity(req, res) {
   try {
     const { userId } = req.params;
     if (userId !== req.userId) {
-      const [x, y] = [req.userId, userId].sort();
+      const [x, y] = orderedPair(req.userId, userId);
       const friendship = await prisma.friendship.findUnique({ where: { userAId_userBId: { userAId: x, userBId: y } } });
       if (!friendship) return res.status(403).json({ error: "ดูกิจกรรมได้เฉพาะเพื่อนเท่านั้น", notFriend: true });
       const owner = await prisma.user.findUnique({ where: { id: userId }, select: { hiddenFields: true } });

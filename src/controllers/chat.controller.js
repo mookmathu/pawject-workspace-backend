@@ -3,6 +3,7 @@ const { getMembership } = require("../lib/permissions");
 const { emitToRoom, emitToUser } = require("../lib/socket");
 const { PUBLIC_USER_SELECT, toPublicUser } = require("../lib/serializeUser");
 const { createNotification } = require("../lib/notify");
+const { orderedPair } = require("../lib/pair");
 
 const SENDER_SELECT = PUBLIC_USER_SELECT;
 // Deliberately excludes attachmentData (the raw bytes) — history fetches
@@ -36,7 +37,7 @@ function serializeMessage(message) {
 // join a DM room the moment it knows who it's chatting with — before the
 // Conversation row for that pair necessarily exists yet.
 function dmRoomName(userIdA, userIdB) {
-  const [a, b] = [userIdA, userIdB].sort();
+  const [a, b] = orderedPair(userIdA, userIdB);
   return `dm:${a}:${b}`;
 }
 
@@ -65,7 +66,7 @@ async function getOrCreateWorkspaceConversation(workspaceId) {
 }
 
 async function getOrCreateDmConversation(userIdA, userIdB) {
-  const [a, b] = [userIdA, userIdB].sort();
+  const [a, b] = orderedPair(userIdA, userIdB);
   const existing = await prisma.conversation.findUnique({
     where: { userAId_userBId: { userAId: a, userBId: b } },
   });
@@ -77,7 +78,7 @@ async function getOrCreateDmConversation(userIdA, userIdB) {
 // Friendship row the friends list itself is built from, so there's no way to
 // message someone who was never added as a friend (or who was removed).
 async function assertFriends(userIdA, userIdB) {
-  const [a, b] = [userIdA, userIdB].sort();
+  const [a, b] = orderedPair(userIdA, userIdB);
   return prisma.friendship.findUnique({ where: { userAId_userBId: { userAId: a, userBId: b } } });
 }
 
@@ -124,7 +125,7 @@ async function bumpUnread(workspaceId, dmParticipantIds, senderId, senderName, p
     const workspaceName = workspace?.isPersonal ? "ของฉัน" : workspace?.name || "กลุ่ม";
     members.forEach((m) => {
       emitToUser(m.userId, "unread:bump", { key });
-      createNotification({
+      void createNotification({
         userId: m.userId,
         type: "message",
         title: `${senderName} ส่งข้อความในกลุ่ม ${workspaceName}`,
@@ -136,7 +137,7 @@ async function bumpUnread(workspaceId, dmParticipantIds, senderId, senderName, p
     const [a, b] = dmParticipantIds;
     const recipientId = a === senderId ? b : a;
     emitToUser(recipientId, "unread:bump", { key: dmUnreadKey(senderId) });
-    createNotification({
+    void createNotification({
       userId: recipientId,
       type: "message",
       title: `ข้อความใหม่จาก ${senderName}`,

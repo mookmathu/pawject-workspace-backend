@@ -24,7 +24,24 @@ const notificationRoutes = require("./routes/notification.routes");
 
 const app = express();
 
-app.use(cors()); // during dev this allows the React app (localhost:3000) to call this API
+// Only our own frontend (and the local dev server) may call this API from a
+// browser. Requests with no Origin header (curl, server-to-server, the OAuth
+// redirects) aren't browser cross-origin calls, so they pass through.
+const allowedOrigins = [
+  process.env.FRONTEND_URL,
+  "https://mypawject.tech",
+  "https://www.mypawject.tech",
+  "http://localhost:3000",
+]
+  .filter(Boolean)
+  .map((o) => o.replace(/\/$/, ""));
+app.use(
+  cors({
+    origin(origin, callback) {
+      callback(null, !origin || allowedOrigins.includes(origin));
+    },
+  })
+);
 app.use(express.json());
 app.use(passport.initialize()); // stateless — every route uses { session: false }
 
