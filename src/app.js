@@ -21,6 +21,9 @@ const notificationRoutes = require("./routes/notification.routes");
 
 const app = express();
 
+// Don't advertise the framework in an "X-Powered-By: Express" response header.
+app.disable("x-powered-by");
+
 // Only our own frontend (and the local dev server) may call this API from a
 // browser. Requests with no Origin header (curl, server-to-server, the OAuth
 // redirects) aren't browser cross-origin calls, so they pass through.

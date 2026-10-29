@@ -143,3 +143,10 @@ describe("upload error handling", () => {
     expect(res.status).toBe(200);
   });
 });
+
+describe("response headers", () => {
+  it("does not reveal the framework", async () => {
+    const res = await call("GET", "/api/health");
+    expect(res.headers.get("x-powered-by")).toBeNull();
+  });
+});

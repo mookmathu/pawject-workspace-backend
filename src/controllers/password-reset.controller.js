@@ -2,8 +2,9 @@ const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 const prisma = require("../lib/prisma");
 const { sendPasswordResetEmail } = require("../lib/resetEmail");
+const { trimTrailingSlash } = require("../lib/url");
 
-const FRONTEND_URL = (process.env.FRONTEND_URL || "http://localhost:3000").replace(/\/+$/, "");
+const FRONTEND_URL = trimTrailingSlash(process.env.FRONTEND_URL || "http://localhost:3000");
 const RESET_TOKEN_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
 async function forgotPassword(req, res) {
